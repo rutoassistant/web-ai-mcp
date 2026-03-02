@@ -1,0 +1,10 @@
+mcp
+patchright
+xvfbwrapper
+python-dotenv
+pyvirtualdisplay
+pytest
+pytest-asyncio
+beautifulsoup4
+markdownify
+trafilatura

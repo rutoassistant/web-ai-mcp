@@ -1,0 +1,34 @@
+services:
+  web-ai-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: web-ai-mcp
+    restart: unless-stopped
+    networks:
+      - traefik
+    environment:
+      - TZ=Asia/Kolkata
+    stdin_open: true
+    # No ports exposed - Traefik will route via service discovery
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.web-ai-mcp.rule=Host(`${WEB_AI_MCP_DOMAIN:-web-ai-mcp.local}`)"
+      - "traefik.http.routers.web-ai-mcp.entrypoints=websecure"
+      - "traefik.http.routers.web-ai-mcp.tls=true"
+      - "traefik.http.routers.web-ai-mcp.tls.certresolver=myresolver"
+      - "traefik.http.services.web-ai-mcp.loadbalancer.server.port=8000"
+    # Mount workspace for development (optional)
+    volumes:
+      - ./data:/app/data
+    # MCP servers are stdio-based; skip HTTP healthcheck
+    # healthcheck:
+    #   test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+    #   interval: 30s
+    #   timeout: 10s
+    #   retries: 3
+
+networks:
+  traefik:
+    external: true
+    name: traefik
