@@ -211,10 +211,13 @@ class BrowserInstance:
             self._closed = True
             self.is_active = False
 
-            # Close all tabs
-            await self.close_all_tabs()
+            for tab_id, tab_info in list(self.tabs.items()):
+                try:
+                    await tab_info.page.close()
+                except Exception as e:
+                    logger.debug(f"Error closing tab {tab_id}: {e}")
+            self.tabs.clear()
 
-            # Close context
             try:
                 await self.context.close()
                 logger.debug(f"Closed context for session {self.session_id}")
@@ -231,7 +234,6 @@ class BrowserInstance:
         """Get the number of open tabs."""
         return len(self.tabs)
 
-    @property
     def is_idle(self, timeout_seconds: float = 300) -> bool:
         """Check if the instance has been idle for too long.
 

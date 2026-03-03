@@ -21,6 +21,7 @@ from src.tools.navigation import NavigationTools
 from src.tools.interaction import InteractionTools
 from src.tools.extraction import ExtractionTools
 from src.tools.stealth_search import StealthSearchTools, SearchResult, ExtractedContent
+from src.tools.gemini_chat import GeminiChatTools
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("stealth-browser-mcp")
@@ -278,6 +279,36 @@ class StealthBrowserServer:
                         "additionalProperties": False,
                     },
                 ),
+                Tool(
+                    name="gemini_chat",
+                    description="Send a message to Gemini and get a response",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "message": {
+                                "type": "string",
+                                "minLength": 1,
+                                "description": "Message to send to Gemini",
+                            },
+                            "timeout": {
+                                "type": "integer",
+                                "default": 60,
+                                "description": "Timeout in seconds (default: 60)",
+                            },
+                        },
+                        "required": ["message"],
+                        "additionalProperties": False,
+                    },
+                ),
+                Tool(
+                    name="gemini_reset",
+                    description="Reset the Gemini chat (start a new conversation)",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {},
+                        "additionalProperties": False,
+                    },
+                ),
             ]
 
         @self.server.call_tool()
@@ -294,7 +325,13 @@ class StealthBrowserServer:
 
         try:
             # Use isolated context for search/extract/scrape to prevent race conditions
-            if name in ("stealth_search", "stealth_extract", "stealth_scrape"):
+            if name in (
+                "stealth_search",
+                "stealth_extract",
+                "stealth_scrape",
+                "gemini_chat",
+                "gemini_reset",
+            ):
                 result = await self._execute_tool_isolated(name, arguments)
             else:
                 result = await self._execute_tool(name, arguments)
@@ -315,7 +352,9 @@ class StealthBrowserServer:
         if session_id and self.browser_manager.subagent_manager:
             # Use sub-agent browser isolation
             logger.info(f"Using sub-agent browser for session: {session_id}")
-            browser_instance = await self.browser_manager.get_subagent_browser(session_id)
+            browser_instance = await self.browser_manager.get_subagent_browser(
+                session_id
+            )
 
             # Get or create a page in the sub-agent's browser
             tabs = await browser_instance.list_tabs()
@@ -338,15 +377,26 @@ class StealthBrowserServer:
                 elif name == "stealth_extract":
                     stealth_tools = StealthSearchTools(page)
                     content = await stealth_tools.extract(
-                        url=arguments["url"], max_length=arguments.get("max_length", 5000)
+                        url=arguments["url"],
+                        max_length=arguments.get("max_length", 5000),
                     )
                     return self._format_extract_response(content)
                 elif name == "stealth_scrape":
                     stealth_tools = StealthSearchTools(page)
                     markdown = await stealth_tools.scrape_page(
-                        url=arguments["url"], include_images=arguments.get("include_images", False)
+                        url=arguments["url"],
+                        include_images=arguments.get("include_images", False),
                     )
                     return markdown
+                elif name == "gemini_chat":
+                    gemini_tools = GeminiChatTools(page)
+                    return await gemini_tools.send_message(
+                        message=arguments["message"],
+                        timeout=arguments.get("timeout", 60) * 1000,
+                    )
+                elif name == "gemini_reset":
+                    gemini_tools = GeminiChatTools(page)
+                    return await gemini_tools.reset_chat()
             finally:
                 # Update activity timestamp
                 browser_instance.update_activity()
@@ -364,15 +414,26 @@ class StealthBrowserServer:
                 elif name == "stealth_extract":
                     stealth_tools = StealthSearchTools(page)
                     content = await stealth_tools.extract(
-                        url=arguments["url"], max_length=arguments.get("max_length", 5000)
+                        url=arguments["url"],
+                        max_length=arguments.get("max_length", 5000),
                     )
                     return self._format_extract_response(content)
                 elif name == "stealth_scrape":
                     stealth_tools = StealthSearchTools(page)
                     markdown = await stealth_tools.scrape_page(
-                        url=arguments["url"], include_images=arguments.get("include_images", False)
+                        url=arguments["url"],
+                        include_images=arguments.get("include_images", False),
                     )
                     return markdown
+                elif name == "gemini_chat":
+                    gemini_tools = GeminiChatTools(page)
+                    return await gemini_tools.send_message(
+                        message=arguments["message"],
+                        timeout=arguments.get("timeout", 60) * 1000,
+                    )
+                elif name == "gemini_reset":
+                    gemini_tools = GeminiChatTools(page)
+                    return await gemini_tools.reset_chat()
 
         return "Unknown tool"
 
@@ -424,7 +485,9 @@ class StealthBrowserServer:
 
         # Navigation tools
         if name == "browser_navigate":
-            await page.goto(arguments["url"], wait_until=arguments.get("wait_until", "load"))
+            await page.goto(
+                arguments["url"], wait_until=arguments.get("wait_until", "load")
+            )
             return f"Navigated to {arguments['url']}"
 
         elif name == "browser_back":
@@ -463,7 +526,9 @@ class StealthBrowserServer:
                 else:
                     return f"Element not found: {arguments['selector']}"
             else:
-                await page.screenshot(path=path, full_page=arguments.get("full_page", False))
+                await page.screenshot(
+                    path=path, full_page=arguments.get("full_page", False)
+                )
             return f"Screenshot saved: {path}"
 
         elif name == "browser_evaluate":
@@ -475,7 +540,9 @@ class StealthBrowserServer:
             captcha_solver = CaptchaSolver()
             result = await captcha_solver.solve(page, timeout=timeout)
             if result.get("success"):
-                return f"CAPTCHA solved successfully in {result.get('duration', 0):.2f}s"
+                return (
+                    f"CAPTCHA solved successfully in {result.get('duration', 0):.2f}s"
+                )
             else:
                 error_msg = result.get("error", "Unknown error")
                 return f"Failed to solve CAPTCHA: {error_msg}"
@@ -483,7 +550,8 @@ class StealthBrowserServer:
         elif name == "stealth_scrape":
             stealth_tools = StealthSearchTools(page)
             markdown = await stealth_tools.scrape_page(
-                url=arguments["url"], include_images=arguments.get("include_images", False)
+                url=arguments["url"],
+                include_images=arguments.get("include_images", False),
             )
             return markdown
 
@@ -510,7 +578,9 @@ class StealthBrowserServer:
         try:
             async with stdio_server() as (read_stream, write_stream):
                 await self.server.run(
-                    read_stream, write_stream, self.server.create_initialization_options()
+                    read_stream,
+                    write_stream,
+                    self.server.create_initialization_options(),
                 )
         finally:
             await self.cleanup()

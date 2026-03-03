@@ -16,7 +16,11 @@ This meets the requirement of "Gemini web like sites which don't need login". Du
 - `chat_reset() -> str`: Clear the conversation history (start new chat).
 - `screenshot() -> str (base64)`: Debug view.
 
-### 3. Target: DuckDuckGo AI Chat
+### 3. Additional Tools: Gemini Web Chat
+- `gemini_chat(message: str, timeout: int = 60) -> str`: Send a message to Gemini and get a response.
+- `gemini_reset() -> str`: Reset the Gemini chat (start a new conversation).
+
+### 4. Target: DuckDuckGo AI Chat
 - **URL**: `https://duckduckgo.com/?q=DuckDuckGo&ia=chat`
 - **Flow**:
   1.  Navigate to URL.
@@ -26,12 +30,12 @@ This meets the requirement of "Gemini web like sites which don't need login". Du
   5.  Wait for streaming response to complete.
   6.  Extract text.
 
-### 4. Stealth Strategy
+### 5. Stealth Strategy
 - **Patchright**: Essential to avoid bot detection on DDG (they have some protections).
 - **User-Agent**: Standard Chrome/Firefox.
 - **Headless**: False (Xvfb) to mimic real user.
 
-## File Structure
+### 6. File Structure
 ```
 web-ai-mcp/
 ├── Dockerfile          # Setup environment
