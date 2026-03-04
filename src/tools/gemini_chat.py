@@ -21,6 +21,8 @@ class GeminiChatTools:
         "rich-textarea div[contenteditable='true']",
         "input[placeholder*='message']",
         "textarea#prompt-input",
+        # Duck.ai specific
+        "textarea[name='user-prompt']",
     ]
 
     SEND_BUTTON_SELECTORS = [
@@ -64,27 +66,44 @@ class GeminiChatTools:
 
     async def _ensure_chat_page(self) -> bool:
         """Navigate to Gemini and ensure chat interface is ready."""
-        try:
-            await self.page.goto(
-                self.GEMINI_URL, wait_until="networkidle", timeout=30000
-            )
-            await asyncio.sleep(2)
+        max_attempts = 2
+        for attempt in range(max_attempts):
+            try:
+                # Use 'load' wait state with longer timeout; Gemini can be slow
+                await self.page.goto(
+                    self.GEMINI_URL, wait_until="load", timeout=120000
+                )
+                await asyncio.sleep(3)
 
-            await self._handle_popups()
+                await self._handle_popups()
 
-            input_element = await self._find_element(
-                self.INPUT_SELECTORS, timeout=10000
-            )
-            if input_element:
-                self._chat_initialized = True
-                return True
+                # Check if we were redirected to Duck.ai (common issue)
+                current_url = self.page.url
+                if "duck.ai" in current_url:
+                    logger.warning("Redirected to Duck.ai detected. Dismissing dialogs...")
+                    await self._dismiss_duckai_dialog()
+                    await asyncio.sleep(2)
 
-            logger.warning("Could not find chat input after navigation")
-            return False
+                input_element = await self._find_element(
+                    self.INPUT_SELECTORS, timeout=20000
+                )
+                if input_element:
+                    self._chat_initialized = True
+                    logger.info("Gemini chat page initialized successfully")
+                    return True
 
-        except Exception as e:
-            logger.error(f"Failed to initialize chat page: {e}")
-            return False
+                logger.warning(f"Could not find chat input after navigation (attempt {attempt+1})")
+                if attempt < max_attempts - 1:
+                    await asyncio.sleep(3)
+                    continue
+                return False
+
+            except Exception as e:
+                logger.error(f"Failed to initialize chat page (attempt {attempt+1}): {e}")
+                if attempt < max_attempts - 1:
+                    await asyncio.sleep(3)
+                    continue
+                return False
 
     async def _handle_popups(self):
         """Handle common popups and overlays."""
@@ -107,7 +126,45 @@ class GeminiChatTools:
             except PlaywrightTimeoutError:
                 continue
 
-    async def send_message(self, message: str, timeout: int = 60000) -> str:
+    async def _dismiss_duckai_dialog(self):
+        """Dismiss the Duck.ai consent dialog that blocks input."""
+        # The dialog appears with dynamic classes; try multiple strategies
+        strategies = [
+            # Close button with specific aria-label
+            lambda: self.page.locator("div[role='dialog'] button[aria-label='Close']").first,
+            # Buttons with common text
+            lambda: self.page.locator("div[role='dialog'] button:has-text('Accept')").first,
+            lambda: self.page.locator("div[role='dialog'] button:has-text('Got it')").first,
+            lambda: self.page.locator("div[role='dialog'] button:has-text('Continue')").first,
+            lambda: self.page.locator("div[role='dialog'] button:has-text('Start')").first,
+            # The actual button on Duck.ai: "Agree and Continue"
+            lambda: self.page.get_by_role("button", name="Agree and Continue"),
+            # Any button containing "Agree"
+            lambda: self.page.locator("div[role='dialog'] button:has-text('Agree')").first,
+            # Any close button on page
+            lambda: self.page.locator("button[aria-label='Close']").first,
+            # Clicking on the dialog itself sometimes works for dismissal
+            lambda: self.page.locator("div[role='dialog']").first,
+        ]
+        for strat in strategies:
+            try:
+                el = await strat()
+                if await el.count() > 0:
+                    if await el.is_visible():
+                        await el.click()
+                        logger.info("Dismissed Duck.ai dialog")
+                        await asyncio.sleep(2)  # wait for UI to settle
+                        return
+            except Exception:
+                continue
+        # As fallback, press Escape to close dialogs
+        try:
+            await self.page.keyboard.press("Escape")
+            await asyncio.sleep(1)
+        except Exception:
+            pass
+
+    async def send_message(self, message: str, timeout: int = 120000) -> str:
         """Send a message to Gemini and return the response."""
         try:
             if not self._chat_initialized:
@@ -116,24 +173,39 @@ class GeminiChatTools:
                     return "Error: Failed to initialize Gemini chat interface"
 
             input_element = await self._find_element(
-                self.INPUT_SELECTORS, timeout=10000
+                self.INPUT_SELECTORS, timeout=20000
             )
             if not input_element:
                 return "Error: Could not find message input field"
 
+            # If input is disabled, try to dismiss overlays one more time
+            if not await input_element.is_enabled():
+                await self._handle_popups()
+                await self._dismiss_duckai_dialog()
+                await asyncio.sleep(1)
+                if not await input_element.is_enabled():
+                    # Reload page as last resort
+                    await self.page.reload(wait_until="domcontentloaded")
+                    await asyncio.sleep(3)
+                    await self._handle_popups()
+                    await self._dismiss_duckai_dialog()
+                    await asyncio.sleep(2)
+                    input_element = await self._find_element(self.INPUT_SELECTORS, timeout=10000)
+                    if not input_element or not await input_element.is_enabled():
+                        return "Error: Input field not enabled after retries"
+
             await input_element.fill(message)
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(1)
 
             send_button = await self._find_element(
-                self.SEND_BUTTON_SELECTORS, timeout=5000
+                self.SEND_BUTTON_SELECTORS, timeout=10000
             )
             if send_button:
                 await send_button.click()
             else:
                 await input_element.press("Enter")
 
-            await asyncio.sleep(2)
-
+            # Wait for response with longer timeout
             response = await self._wait_for_response(timeout)
             return response
 
@@ -146,24 +218,32 @@ class GeminiChatTools:
     async def _wait_for_response(self, timeout: int) -> str:
         """Wait for and extract Gemini's response."""
         try:
+            # Wait for network to be idle, but with a cap
             await self.page.wait_for_load_state("networkidle", timeout=timeout)
-
             await asyncio.sleep(3)
 
+            # Try to find a response element
             response_element = await self._find_element(
-                self.RESPONSE_SELECTORS, timeout=15000
+                self.RESPONSE_SELECTORS, timeout=20000
             )
             if response_element:
                 response_text = await response_element.inner_text()
                 if response_text and response_text.strip():
                     return response_text.strip()
 
+            # Fallback: evaluate to get any meaningful text from common containers
             response_text = await self.page.evaluate("""
                 () => {
-                    const candidates = document.querySelectorAll('gemini-response-viewer, response-content, div[role="presentation"]');
+                    const candidates = document.querySelectorAll('gemini-response-viewer, response-content, div[role="presentation"], model-response, chat-turn, .response, .answer');
                     for (const candidate of candidates) {
                         const text = candidate.innerText || candidate.textContent;
                         if (text && text.length > 10) return text;
+                    }
+                    // As last resort, return the last large text block in the page
+                    const allText = document.body.innerText;
+                    if (allText && allText.length > 20) {
+                        // Return last 2000 chars as a heuristic
+                        return allText.slice(-2000);
                     }
                     return '';
                 }
@@ -192,9 +272,10 @@ class GeminiChatTools:
                 self._chat_initialized = False
                 return "Chat reset successfully"
 
+            # Avoid networkidle timeout: use domcontentloaded
             try:
                 await self.page.goto(
-                    self.GEMINI_URL, wait_until="networkidle", timeout=30000
+                    self.GEMINI_URL, wait_until="domcontentloaded", timeout=30000
                 )
                 await asyncio.sleep(2)
                 self._chat_initialized = False

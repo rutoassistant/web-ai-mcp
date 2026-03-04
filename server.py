@@ -11,15 +11,26 @@ from mcp.types import Tool, TextContent, ImageContent, EmbeddedResource
 import patchright
 from patchright.async_api import async_playwright, Browser, Page, Playwright
 
+# Import Gemini tools (must be importable after uv sync)
+try:
+    from src.tools.gemini_chat import GeminiChatTools
+except ImportError as e:
+    GeminiChatTools = None  # type: ignore
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("web-ai-mcp")
+
+if GeminiChatTools is not None:
+    logger.info("GeminiChatTools loaded")
+else:
+    logger.warning(f"GeminiChatTools import failed: {e}")
 
 app = Server("web-ai-mcp")
 
 playwright_instance: Optional[Playwright] = None
 browser_instance: Optional[Browser] = None
 page_instance: Optional[Page] = None
-current_model: str = "gpt-4o-mini"
+gemini_tools: Optional["GeminiChatTools"] = None
 
 
 async def dismiss_overlays(page):
@@ -79,6 +90,46 @@ async def dismiss_overlays(page):
     return False
 
 
+async def find_chat_input(page):
+    """Resilient selector chain for DuckDuckGo AI Chat input."""
+    import re
+
+    strategies = [
+        # Accessibility-first
+        lambda: page.get_by_role("textbox", name=re.compile(r"prompt|message|ask", re.I)),
+        lambda: page.get_by_label(re.compile(r"prompt|message|ask", re.I)),
+        lambda: page.get_by_placeholder(re.compile(r"prompt|message|ask", re.I)),
+        # Test/QA attributes
+        lambda: page.locator('[data-testid*="prompt"]'),
+        lambda: page.locator('[data-qa*="prompt"]'),
+        lambda: page.locator('[data-test*="prompt"]'),
+        # Name attributes
+        lambda: page.locator('textarea[name*="prompt"]'),
+        lambda: page.locator('textarea[name*="user-prompt"]'),
+        lambda: page.locator('input[name*="prompt"]'),
+        # Class heuristics
+        lambda: page.locator('[class*="prompt"]'),
+        lambda: page.locator('[class*="chat"]'),
+        lambda: page.locator('[class*="input"]'),
+        # Structural fallbacks
+        lambda: page.locator("textarea"),
+        lambda: page.locator('input[type="text"]'),
+        lambda: page.locator('[contenteditable="true"]'),
+    ]
+
+    for strat in strategies:
+        try:
+            loc = strat()
+            count = await loc.count()
+            if count > 0:
+                el = loc.first
+                if await el.is_visible() and await el.is_enabled():
+                    return el
+        except Exception:
+            continue
+    raise Exception("Chat input not found with any strategy")
+
+
 async def ensure_browser():
     global playwright_instance, browser_instance, page_instance
     if not playwright_instance:
@@ -101,42 +152,54 @@ async def ensure_browser():
         )
         try:
             await page.wait_for_timeout(3000)
+            # Try resilient input finder up to 3 attempts
             for attempt in range(3):
-                input_selectors = [
-                    'textarea[name="user-prompt"]',
-                    'textarea[placeholder*="Ask"]',
-                    "textarea",
-                ]
-                input_el = None
-                for sel in input_selectors:
-                    el = page.locator(sel)
-                    if await el.count() > 0:
-                        input_el = el
-                        break
-                if input_el:
-                    is_enabled = await input_el.is_enabled()
-                    if is_enabled:
+                try:
+                    input_el = await find_chat_input(page)
+                    if await input_el.is_enabled():
                         logger.info("Input is enabled, ready.")
                         break
                     else:
-                        logger.info(
-                            f"Input disabled (attempt {attempt + 1}), dismissing overlays..."
-                        )
+                        logger.info(f"Input disabled (attempt {attempt + 1}), dismissing overlays...")
                         clicked = await dismiss_overlays(page)
                         if not clicked and attempt == 0:
                             logger.info("Reloading page for clean state...")
                             await page.reload(wait_until="domcontentloaded")
-                else:
-                    logger.warning("Textarea not found")
-                    break
+                except Exception as e:
+                    logger.warning(f"Could not find input (attempt {attempt + 1}): {e}")
+                    if attempt == 0:
+                        await page.reload(wait_until="domcontentloaded")
+                    else:
+                        break
         except Exception as e:
             logger.warning(f"Error during setup: {e}")
     return page_instance
 
 
+async def ensure_gemini_browser():
+    global playwright_instance, browser_instance, gemini_tools
+    if GeminiChatTools is None:
+        raise Exception("GeminiChatTools not available (import failed)")
+    if not playwright_instance:
+        playwright_instance = await async_playwright().start()
+    if not browser_instance:
+        browser_instance = await playwright_instance.chromium.launch(
+            headless=False, args=["--disable-blink-features=AutomationControlled"]
+        )
+    if gemini_tools is None:
+        context = await browser_instance.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            viewport={"width": 1280, "height": 720},
+        )
+        gemini_page = await context.new_page()
+        gemini_tools = GeminiChatTools(gemini_page)
+        logger.info("Gemini tools initialized with new page")
+    return gemini_tools
+
+
 @app.list_tools()
 async def list_tools() -> list[Tool]:
-    return [
+    tools = [
         Tool(
             name="chat_send",
             description="Send a message to DuckDuckGo AI Chat (No login required)",
@@ -277,6 +340,26 @@ async def list_tools() -> list[Tool]:
         ),
     ]
 
+    if GeminiChatTools is not None:
+        tools.extend([
+            Tool(
+                name="gemini_chat",
+                description="Send a message to Gemini Web (gemini.google.com)",
+                inputSchema={
+                    "type": "object",
+                    "properties": {"message": {"type": "string"}},
+                    "required": ["message"],
+                },
+            ),
+            Tool(
+                name="gemini_reset",
+                description="Reset the Gemini chat conversation",
+                inputSchema={"type": "object", "properties": {}},
+            ),
+        ])
+
+    return tools
+
 
 @app.call_tool()
 async def call_tool(
@@ -294,22 +377,14 @@ async def call_tool(
             except Exception as e:
                 logger.debug(f"Iframe not found: {e}")
             target = frame if frame else page
-            input_selectors = [
-                'textarea[name="user-prompt"]',
-                'textarea[placeholder*="Ask"]',
-                "textarea",
-            ]
-            input_selector = None
-            for sel in input_selectors:
-                if await target.locator(sel).count() > 0:
-                    input_selector = sel
-                    break
-            if not input_selector:
-                raise Exception("Input textarea not found")
-            await target.wait_for_selector(
-                input_selector, state="visible", timeout=10000
-            )
-            input_el = target.locator(input_selector)
+
+            # Find input using resilient selector
+            try:
+                input_el = await find_chat_input(target)
+            except Exception as e:
+                raise Exception(f"Chat input not found: {e}")
+
+            # Ensure input is enabled; if not, dismiss overlays and retry
             if not await input_el.is_enabled():
                 await dismiss_overlays(page)
                 await page.wait_for_timeout(1000)
@@ -318,6 +393,7 @@ async def call_tool(
                     await page.wait_for_timeout(3000)
                     await dismiss_overlays(page)
                     await page.wait_for_timeout(1000)
+                    # Re-acquire input after reload
                     try:
                         iframe_el = page.locator("iframe#jsa")
                         if await iframe_el.count() > 0:
@@ -325,10 +401,11 @@ async def call_tool(
                             target = frame if frame else page
                     except:
                         target = page
-                    input_el = target.locator(input_selector)
-                    if await input_el.count() == 0 or not await input_el.is_enabled():
-                        raise Exception("Input textarea not available after reload")
-            await target.fill(input_selector, message)
+                    input_el = await find_chat_input(target)
+                    if not await input_el.is_enabled():
+                        raise Exception("Chat input not available after reload")
+
+            await input_el.fill(message)
             await target.keyboard.press("Enter")
             await page.wait_for_timeout(2000)
             await page.wait_for_timeout(20000)  # longer wait for full response
@@ -452,6 +529,19 @@ async def call_tool(
                     type="text", text=f"Extracted content from {url}:\n{md[:1000]}"
                 )
             ]
+        elif name == "gemini_chat":
+            if GeminiChatTools is None:
+                raise Exception("Gemini tools not available (missing dependency)")
+            tools = await ensure_gemini_browser()
+            message = arguments.get("message")
+            response = await tools.send_message(message)
+            return [TextContent(type="text", text=response)]
+        elif name == "gemini_reset":
+            if GeminiChatTools is None:
+                raise Exception("Gemini tools not available (missing dependency)")
+            tools = await ensure_gemini_browser()
+            result = await tools.reset_chat()
+            return [TextContent(type="text", text=result)]
         else:
             raise ValueError(f"Unknown tool: {name}")
     except Exception as e:
