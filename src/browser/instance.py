@@ -55,6 +55,7 @@ class BrowserInstance:
         self.is_active = True
         self._lock = asyncio.Lock()
         self._closed = False
+        self._tab_counter = 0  # Monotonic counter for unique tab IDs
 
         logger.info(f"BrowserInstance created for session {session_id}")
 
@@ -85,7 +86,8 @@ class BrowserInstance:
 
             # Generate tab ID if not provided
             if tab_id is None:
-                tab_id = f"tab_{int(time.time() * 1000)}_{len(self.tabs)}"
+                self._tab_counter += 1
+                tab_id = f"tab_{self._tab_counter}"
 
             # Create new page
             page = await self.context.new_page()
