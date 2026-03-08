@@ -53,12 +53,19 @@ def mock_page():
         return make_mock_locator(enable=True, count=1)
 
     page.locator = MagicMock(side_effect=locator_side_effect)
-    # get_by_role chain
+    # get_by_role chain - need to properly mock the chain
     role_mock = MagicMock()
-    role_mock.count = AsyncMock(return_value=0)
-    role_mock.is_visible = AsyncMock(return_value=False)
+    role_mock.count = AsyncMock(return_value=1)  # Return 1 so element is found
+    role_mock.first = make_mock_locator(
+        enable=True, count=1
+    )  # .first returns a locator
+    role_mock.is_visible = AsyncMock(return_value=True)
+    role_mock.is_enabled = AsyncMock(return_value=True)
     role_mock.click = AsyncMock()
     page.get_by_role = MagicMock(return_value=role_mock)
+    # Also mock get_by_label and get_by_placeholder
+    page.get_by_label = MagicMock(return_value=role_mock)
+    page.get_by_placeholder = MagicMock(return_value=role_mock)
     # Ensure content_frame not accidentally used
     page.content_frame = AsyncMock(return_value=page)  # fallback if somehow used
     return page

@@ -1,5 +1,6 @@
 mcp
 patchright
+opencv-python
 xvfbwrapper
 python-dotenv
 pyvirtualdisplay

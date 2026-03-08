@@ -180,6 +180,16 @@ class XvfbManager:
                 self._is_running = False
                 logger.info("Xvfb stopped")
 
+    async def __aenter__(self):
+        """Async context manager entry."""
+        await self.start()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Async context manager exit."""
+        await self.stop()
+        return False
+
     async def _is_xvfb_running(self) -> bool:
         """Check if Xvfb is running on the configured display."""
         try:

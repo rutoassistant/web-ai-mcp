@@ -121,13 +121,20 @@ class TestBrowserManager:
             manager.subagent_manager = MagicMock()
             manager.subagent_manager.stop = AsyncMock()
 
+            # Save references before stop() clears them
+            mock_subagent = manager.subagent_manager
+            mock_page = manager.page
+            mock_context = manager.context
+            mock_browser = manager.browser
+            mock_playwright = manager.playwright
+
             await manager.stop()
 
-            manager.subagent_manager.stop.assert_called_once()
-            manager.page.close.assert_called_once()
-            manager.context.close.assert_called_once()
-            manager.browser.close.assert_called_once()
-            manager.playwright.stop.assert_called_once()
+            mock_subagent.stop.assert_called_once()
+            mock_page.close.assert_called_once()
+            mock_context.close.assert_called_once()
+            mock_browser.close.assert_called_once()
+            mock_playwright.stop.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_new_page(self):

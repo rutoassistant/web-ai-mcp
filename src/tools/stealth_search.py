@@ -35,7 +35,7 @@ class SearchResult(BaseModel):
     title: str
     url: str
     snippet: str
-    position: int
+    position: int = 0
 
 
 class AISummary(BaseModel):
@@ -75,7 +75,9 @@ class StealthSearchTools:
     def __init__(self, page: Page):
         self.page = page
 
-    async def search(self, query: str, count: int = 10, page: int = 1) -> SearchResponse:
+    async def search(
+        self, query: str, count: int = 10, page: int = 1
+    ) -> SearchResponse:
         """Search Brave Search and return structured results.
 
         Args:
@@ -116,7 +118,8 @@ class StealthSearchTools:
         try:
             # Primary: Wait for any link with external URL
             await self.page.wait_for_selector(
-                "a[href^='https://www.'], a[href^='https://en.'], a[href^='http']", timeout=20000
+                "a[href^='https://www.'], a[href^='https://en.'], a[href^='http']",
+                timeout=20000,
             )
             logger.info("Found external links on page")
 
@@ -159,10 +162,14 @@ class StealthSearchTools:
                         }
                     """)
                     if has_text:
-                        logger.info(f"AI Summary text populated after {(i + 1) * 500}ms")
+                        logger.info(
+                            f"AI Summary text populated after {(i + 1) * 500}ms"
+                        )
                         break
                 else:
-                    logger.info("AI Summary element found but text not populated after 5s")
+                    logger.info(
+                        "AI Summary element found but text not populated after 5s"
+                    )
 
             except Exception as e:
                 logger.info(f"AI Summary not found or timed out: {e}")
@@ -385,7 +392,8 @@ class StealthSearchTools:
         ai_summary = None
         if ai_summary_data:
             ai_summary = AISummary(
-                text=ai_summary_data.get("text", ""), sources=ai_summary_data.get("sources", [])
+                text=ai_summary_data.get("text", ""),
+                sources=ai_summary_data.get("sources", []),
             )
 
         logger.info(f"Found {len(search_results)} search results")
@@ -743,7 +751,11 @@ class StealthSearchTools:
             summary = self._generate_summary(content)
 
         return ExtractedContent(
-            title=title, url=url, content=content, summary=summary, word_count=word_count
+            title=title,
+            url=url,
+            content=content,
+            summary=summary,
+            word_count=word_count,
         )
 
     async def _get_page_title(self) -> str:
@@ -959,7 +971,11 @@ async def stealth_search(
 
 
 async def stealth_extract(
-    page: Page, url: str, max_length: int = 5000, session_id: Optional[str] = None, manager=None
+    page: Page,
+    url: str,
+    max_length: int = 5000,
+    session_id: Optional[str] = None,
+    manager=None,
 ) -> ExtractedContent:
     """Convenience function to extract content.
 

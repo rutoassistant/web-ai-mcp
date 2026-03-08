@@ -2,9 +2,11 @@
 Tests for StealthConfig and XvfbManager in src/browser/stealth.py
 """
 
-import pytest
+import asyncio
 import os
-from unittest.mock import AsyncMock, MagicMock, patch
+import pytest
+from unittest.mock import patch, MagicMock, AsyncMock
+from src.browser import StealthConfig, XvfbManager, detect_display, setup_xvfb_env
 
 
 class TestStealthConfig:
@@ -284,18 +286,25 @@ class TestXvfbManager:
 
             assert result is False
 
-    def test_context_manager(self):
+    @pytest.mark.asyncio
+    async def test_context_manager(self):
         """Test XvfbManager as context manager."""
-        manager = XvfbManager()
+        with (
+            patch(
+                "src.browser.stealth.XvfbManager.start", new_callable=AsyncMock
+            ) as mock_start,
+            patch(
+                "src.browser.stealth.XvfbManager.stop", new_callable=AsyncMock
+            ) as mock_stop,
+        ):
+            mock_start.return_value = True
 
-        with patch.object(manager, "start", new_callable=AsyncMock) as mock_start:
-            with patch.object(manager, "stop", new_callable=AsyncMock) as mock_stop:
-                mock_start.return_value = True
+            manager = XvfbManager()
 
-                with manager as m:
-                    assert m is manager
+            async with manager as m:
+                assert m is manager
 
-                mock_stop.assert_called_once()
+            mock_stop.assert_called_once()
 
 
 class TestDetectDisplay:

@@ -418,7 +418,8 @@ class TestCleanupLoop:
 class TestGlobalFunctions:
     """Test global singleton functions."""
 
-    def test_get_subagent_manager_creates_singleton(self):
+    @pytest.mark.asyncio
+    async def test_get_subagent_manager_creates_singleton(self):
         """Test get_subagent_manager creates singleton."""
         import src.browser.subagent_manager as subagent_module
 
@@ -438,13 +439,16 @@ class TestGlobalFunctions:
 
                 mock_instance.start = mock_start
 
-                result = subagent_module.get_subagent_manager(idle_timeout_minutes=20)
+                result = await subagent_module.get_subagent_manager(
+                    idle_timeout_minutes=20
+                )
 
                 mock_class.assert_called_once_with(idle_timeout_minutes=20)
         finally:
             subagent_module._subagent_manager = original_manager
 
-    def test_get_subagent_manager_returns_existing(self):
+    @pytest.mark.asyncio
+    async def test_get_subagent_manager_returns_existing(self):
         """Test get_subagent_manager returns existing singleton."""
         import src.browser.subagent_manager as subagent_module
 
@@ -454,7 +458,7 @@ class TestGlobalFunctions:
         try:
             subagent_module._subagent_manager = mock_existing
 
-            result = subagent_module.get_subagent_manager()
+            result = await subagent_module.get_subagent_manager()
 
             assert result is mock_existing
         finally:

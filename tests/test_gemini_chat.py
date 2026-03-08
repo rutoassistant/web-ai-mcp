@@ -27,6 +27,9 @@ def create_mock_element():
     element = MagicMock()
     element.fill = AsyncMock()
     element.click = AsyncMock()
+    element.press = AsyncMock()
+    element.is_enabled = AsyncMock(return_value=True)
+    element.is_visible = AsyncMock(return_value=True)
     element.inner_text = AsyncMock(return_value="Test response")
     element.text_content = AsyncMock(return_value="Test content")
     return element
@@ -82,7 +85,9 @@ class TestGeminiChatTools:
     async def test_find_element_timeout(self):
         """Test _find_element returns None on timeout."""
         page = create_mock_page()
-        page.wait_for_selector = AsyncMock(side_effect=PlaywrightTimeoutError())
+        page.wait_for_selector = AsyncMock(
+            side_effect=PlaywrightTimeoutError("Timeout")
+        )
 
         tools = GeminiChatTools(page)
         result = await tools._find_element(["selector1", "selector2"], timeout=1000)
@@ -131,7 +136,9 @@ class TestGeminiChatTools:
     async def test_handle_popups_no_popup(self):
         """Test _handle_popups when no popup present."""
         page = create_mock_page()
-        page.wait_for_selector = AsyncMock(side_effect=PlaywrightTimeoutError())
+        page.wait_for_selector = AsyncMock(
+            side_effect=PlaywrightTimeoutError("Timeout")
+        )
 
         tools = GeminiChatTools(page)
         await tools._handle_popups()
@@ -173,7 +180,9 @@ class TestGeminiChatTools:
         mock_element = create_mock_element()
 
         page.wait_for_selector = AsyncMock(return_value=mock_element)
-        page.wait_for_load_state = AsyncMock(side_effect=PlaywrightTimeoutError())
+        page.wait_for_load_state = AsyncMock(
+            side_effect=PlaywrightTimeoutError("Timeout")
+        )
 
         tools = GeminiChatTools(page)
         tools._chat_initialized = True
